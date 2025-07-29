@@ -1,0 +1,1 @@
+const RoutesPage = () => <h1>Маршруты</h1>; export default RoutesPage;
