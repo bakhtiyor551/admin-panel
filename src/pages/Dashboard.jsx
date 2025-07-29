@@ -188,7 +188,13 @@ export default function Dashboard() {
           const pos = positions[v.id];
           return pos ? (
             <Marker key={v.id} position={{ lat: pos[0], lng: pos[1] }}>
-              <Popup>{v.name}</Popup>
+              <Popup>
+                <div>
+                  <b>{v.name}</b><br/>
+                  Статус: {v.status}<br/>
+                  Координаты: {pos[0].toFixed(5)}, {pos[1].toFixed(5)}
+                </div>
+              </Popup>
             </Marker>
           ) : null;
         })}
