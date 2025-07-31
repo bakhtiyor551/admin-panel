@@ -18,17 +18,16 @@ console.log('DB_PORT:', process.env.DB_PORT || 3306);
 console.log('DB_USER:', process.env.DB_USER || 'baha_usr');
 console.log('DB_NAME:', process.env.DB_NAME || 'baha');
 
-// Настройка подключения к MySQL
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'baha_usr',
-  password: process.env.DB_PASSWORD || 'rLn8UWkaOy1lCzxw',
-  database: process.env.DB_NAME || 'baha',
-  port: process.env.DB_PORT || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
+// Проверка подключения к базе данных
+const checkDatabaseConnection = async () => {
+  try {
+    await pool.getConnection();
+    console.log('База данных подключена успешно.');
+  } catch (error) {
+    console.error('Ошибка подключения к базе данных:', error);
+    process.exit(1);
+  }
+};
 
 // Получить все vehicles
 app.get('/api/vehicles', async (req, res) => {
