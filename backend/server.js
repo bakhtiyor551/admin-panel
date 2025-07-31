@@ -5,10 +5,29 @@ import { Server } from 'socket.io';
 import { pool } from './db.js';
 
 const app = express();
-const PORT = 3002;
+const PORT = process.env.PORT || 3002;
 
+// Настройка CORS
 app.use(cors());
 app.use(express.json());
+
+// Отладочная информация
+console.log('Настройки подключения к БД:');
+console.log('DB_HOST:', process.env.DB_HOST || 'localhost');
+console.log('DB_PORT:', process.env.DB_PORT || 3306);
+console.log('DB_USER:', process.env.DB_USER || 'baha_usr');
+console.log('DB_NAME:', process.env.DB_NAME || 'baha');
+
+// Проверка подключения к базе данных
+const checkDatabaseConnection = async () => {
+  try {
+    await pool.getConnection();
+    console.log('База данных подключена успешно.');
+  } catch (error) {
+    console.error('Ошибка подключения к базе данных:', error);
+    process.exit(1);
+  }
+};
 
 // Получить все vehicles
 app.get('/api/vehicles', async (req, res) => {
