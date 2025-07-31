@@ -5,10 +5,30 @@ import { Server } from 'socket.io';
 import { pool } from './db.js';
 
 const app = express();
-const PORT = 3002;
+const PORT = process.env.PORT || 3002;
 
+// Настройка CORS
 app.use(cors());
 app.use(express.json());
+
+// Отладочная информация
+console.log('Настройки подключения к БД:');
+console.log('DB_HOST:', process.env.DB_HOST || 'localhost');
+console.log('DB_PORT:', process.env.DB_PORT || 3306);
+console.log('DB_USER:', process.env.DB_USER || 'baha_usr');
+console.log('DB_NAME:', process.env.DB_NAME || 'baha');
+
+// Настройка подключения к MySQL
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'baha_usr',
+  password: process.env.DB_PASSWORD || 'rLn8UWkaOy1lCzxw',
+  database: process.env.DB_NAME || 'baha',
+  port: process.env.DB_PORT || 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
 
 // Получить все vehicles
 app.get('/api/vehicles', async (req, res) => {
