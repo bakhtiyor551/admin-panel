@@ -1,132 +1,152 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { pool } from './db.js';
+import { config } from './config/config.js';
+import { pool, checkDatabaseConnection } from './db.js';
+import { logger } from './utils/logger.js';
+import { errorHandler, notFound } from './middleware/errorHandler.js';
+import { initializeDatabase } from './utils/dbInit.js';
+import { setupSocketHandlers } from './socket/socketHandlers.js';
+
+// Импорт роутов
+import authRoutes from './routes/authRoutes.js';
+import vehicleRoutes from './routes/vehicleRoutes.js';
+import positionRoutes from './routes/positionRoutes.js';
+import routeRoutes from './routes/routeRoutes.js';
+import driverRoutes from './routes/driverRoutes.js';
 
 const app = express();
-const PORT = 3002;
 
-app.use(cors());
-app.use(express.json());
+// Middleware для безопасности
+app.use(helmet());
+app.use(compression());
 
-// Получить все vehicles
-app.get('/api/vehicles', async (req, res) => {
-  const [rows] = await pool.query('SELECT * FROM vehicles');
-  res.json(rows);
+// CORS настройки
+app.use(cors({
+  origin: config.server.isDev ? '*' : process.env.FRONTEND_URL,
+  credentials: true
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.max,
+  message: 'Слишком много запросов с этого IP, попробуйте позже'
 });
 
-// Получить все позиции
-app.get('/api/positions', async (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  const [rows] = await pool.query('SELECT * FROM positions');
-  res.json(rows);
-});
+app.use('/api/', limiter);
 
-// Получить последнюю позицию для каждого транспорта
-app.get('/api/positions/latest', async (req, res) => {
-  const [rows] = await pool.query(`
-    SELECT p.*
-    FROM positions p
-    INNER JOIN (
-      SELECT vehicle_id, MAX(id) as max_id
-      FROM positions
-      GROUP BY vehicle_id
-    ) last
-    ON p.vehicle_id = last.vehicle_id AND p.id = last.max_id
-  `);
-  res.json(rows);
-});
+// Парсинг JSON
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Получить последнюю позицию по конкретному vehicle_id
-app.get('/api/positions/:vehicle_id', async (req, res) => {
-  const { vehicle_id } = req.params;
-  const [rows] = await pool.query(
-    'SELECT * FROM positions WHERE vehicle_id = ? ORDER BY id DESC LIMIT 1',
-    [vehicle_id]
-  );
-  if (rows.length === 0) {
-    return res.status(404).json({ error: 'Нет данных для этого транспорта' });
-  }
-  res.json(rows[0]);
-});
-
-// Добавить транспорт
-app.post('/api/vehicles', async (req, res) => {
-  const { name, status } = req.body;
-  const [result] = await pool.query('INSERT INTO vehicles (name, status) VALUES (?, ?)', [name, status]);
-  res.json({ id: result.insertId, name, status });
-});
-
-// Обновить позицию транспорта
-app.post('/api/positions', async (req, res) => {
-  const { vehicle_id, lat, lng } = req.body;
-  await pool.query('INSERT INTO positions (vehicle_id, lat, lng) VALUES (?, ?, ?)', [vehicle_id, lat, lng]);
-  res.json({ success: true });
-});
-
-// Получить историю маршрутов с маркой машины
-app.get('/api/history', async (req, res) => {
-  const [rows] = await pool.query(`
-    SELECT h.id, h.date, h.from_lat, h.from_lng, h.to_lat, h.to_lng, h.route, v.name AS vehicle_name
-    FROM history h
-    LEFT JOIN vehicles v ON h.vehicle_id = v.id
-    ORDER BY h.date DESC
-  `);
-  res.json(rows);
-});
-
-// Добавить запись в историю маршрута
-app.post('/api/history', async (req, res) => {
-  const { vehicleId, start, finish, route } = req.body;
-  await pool.query(
-    'INSERT INTO history (vehicle_id, from_lat, from_lng, to_lat, to_lng, route) VALUES (?, ?, ?, ?, ?, ?)',
-    [
-      vehicleId,
-      start.lat,
-      start.lng,
-      finish.lat,
-      finish.lng,
-      JSON.stringify(route)
-    ]
-  );
-  res.json({ success: true });
-});
-
-// Обновить маршрут в истории
-app.put('/api/history/:id', async (req, res) => {
-  const { start, finish, route } = req.body;
-  const { id } = req.params;
-  await pool.query(
-    'UPDATE history SET from_lat=?, from_lng=?, to_lat=?, to_lng=?, route=? WHERE id=?',
-    [start.lat, start.lng, finish.lat, finish.lng, JSON.stringify(route), id]
-  );
-  res.json({ success: true });
-});
-
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: '*',
-  }
-});
-
-// Socket.io: отправка координат из базы
-setInterval(async () => {
-  const [positions] = await pool.query('SELECT * FROM positions');
-  positions.forEach(pos => {
-    io.emit('positionUpdate', {
-      carId: pos.vehicle_id,
-      lat: pos.lat,
-      lng: pos.lng
-    });
+// Логирование запросов
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.path}`, {
+    ip: req.ip,
+    userAgent: req.get('user-agent')
   });
-}, 5000);
-
-io.on('connection', (socket) => {
-  console.log('Socket connected:', socket.id);
+  next();
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
-}); 
+// Проверка здоровья сервера
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date(),
+    uptime: process.uptime()
+  });
+});
+
+// API роуты
+app.use('/api/auth', authRoutes);
+app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/positions', positionRoutes);
+app.use('/api/routes', routeRoutes);
+app.use('/api/drivers', driverRoutes);
+
+// Обработка несуществующих маршрутов
+app.use(notFound);
+
+// Центральная обработка ошибок
+app.use(errorHandler);
+
+// Создание HTTP сервера
+const httpServer = createServer(app);
+
+// Настройка Socket.IO
+const io = new Server(httpServer, {
+  cors: config.socket.cors,
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+// Сохраняем io в app для доступа из роутов
+app.set('io', io);
+
+// Настройка обработчиков Socket.IO
+setupSocketHandlers(io);
+
+// Запуск сервера
+async function startServer() {
+  try {
+    // Проверка подключения к БД
+    const dbConnected = await checkDatabaseConnection();
+    if (!dbConnected) {
+      throw new Error('Не удалось подключиться к базе данных');
+    }
+    
+    // Инициализация базы данных
+    await initializeDatabase();
+    
+    // Запуск HTTP сервера
+    httpServer.listen(config.server.port, () => {
+      logger.info(`🚀 Сервер запущен на порту ${config.server.port}`);
+      logger.info(`📊 Окружение: ${config.server.env}`);
+      logger.info(`🔌 Socket.IO готов к подключениям`);
+      
+      if (config.server.isDev) {
+        logger.info(`📝 API документация: http://localhost:${config.server.port}/api-docs`);
+      }
+    });
+    
+  } catch (error) {
+    logger.error('Ошибка запуска сервера:', error);
+    process.exit(1);
+  }
+}
+
+// Обработка завершения процесса
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+async function gracefulShutdown() {
+  logger.info('Получен сигнал завершения, начинаем graceful shutdown...');
+  
+  // Закрываем HTTP сервер
+  httpServer.close(() => {
+    logger.info('HTTP сервер закрыт');
+  });
+  
+  // Закрываем подключения Socket.IO
+  io.close(() => {
+    logger.info('Socket.IO закрыт');
+  });
+  
+  // Закрываем пул соединений с БД
+  try {
+    await pool.end();
+    logger.info('Пул соединений с БД закрыт');
+  } catch (error) {
+    logger.error('Ошибка при закрытии пула БД:', error);
+  }
+  
+  process.exit(0);
+}
+
+// Запускаем сервер
+startServer(); 
